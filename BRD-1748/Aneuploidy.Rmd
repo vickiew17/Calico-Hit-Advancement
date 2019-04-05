@@ -1,0 +1,107 @@
+---
+title: "BRD-1748 Aneuploidy"
+author: "Vickie"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+  html_notebook:
+    theme: spacelab
+    toc: yes
+    toc_float: yes
+editor_options:
+  chunk_output_type: console
+---
+```{r, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.align = 'center', fig.width = 10, fig.height = 7)
+```
+
+```{r, include = FALSE}
+### Import libraries
+library(readxl)
+library(useful)
+library(taigr)
+library(magrittr)
+library(tidyverse)
+library(glmnet)
+library(ranger)
+library(pheatmap)
+library(RColorBrewer)
+library(prismr)
+library(piano)
+library(cdsr)
+library(ggthemes)
+library(scales)
+library(GSEABase)
+library(hrbrthemes)
+library(plotly)
+library(ggrepel)
+library(gridExtra)
+library(cowplot)
+library(rapportools)
+library(devtools)
+library(edgeR)
+library(matrixStats)
+library(ggtech)
+library(gg3D)
+library(Rtsne)
+library(umap)
+library(WGCNA)
+library(plyr)
+library(dplyr)
+```
+
+```{r}
+aneutable <- readxl::read_excel("./aneuploidy_data_table_for_JamesRong.xlsx", sheet=1)
+aneutable %<>% dplyr::mutate(jul = as.numeric(jul_aneupl_score),abs = as.numeric(abs_arm_events), gistic = as.numeric(gistic_arm_dels)) %>% 
+    dplyr::select(CCLE_ID, jul, abs, gistic)
+ggplot(aneutable) + geom_boxplot(aes(y=jul))
+
+quantile(aneutable$jul,na.rm = T)
+
+
+prism <- data.table::fread("./assaydata_BRD-K05641748-001-02-4.csv")
+
+
+
+joint <- left_join(prism,aneutable,by = c("Cell_line" = "CCLE_ID"))
+joint$binnedjul <- cut_number(joint$jul,4)
+joint$binnedabs <- cut_number(joint$abs,4)
+joint$binnedgistic <- cut_number(joint$gistic,4)
+
+
+ggplot(joint) + geom_boxplot(aes(y = log2(`2.5uM`/100), x = binnedjul))
+ggplot(joint) + geom_boxplot(aes(y = `2.5uM`, x = binnedjul))
+
+ggplot(joint) + geom_point(aes(y = `2.5uM`, x = jul))
+
+
+
+ggplot(joint) + geom_boxplot(aes(y = `2.5uM`, x = binnedabs))
+
+ggplot(joint) + geom_point(aes(y = `2.5uM`, x = abs))
+
+
+
+ggplot(joint) + geom_boxplot(aes(y = `2.5uM`, x = binnedgistic))
+
+ggplot(joint) + geom_point(aes(y = `2.5uM`, x = gistic))
+
+
+ggplot(joint) + geom_point(aes(x=jul,y=abs))
+
+```
+
+```{r}
+armlevel <- data.table::fread("./CCLE_arms_annos_030716.txt")
+chr19 <- dplyr::select(armlevel, V1,`19p`)
+
+a <- left_join(prism,chr19, by = c("Cell_line" = "V1")) 
+
+a %>% ggplot() +
+    geom_boxplot(aes(x = ifelse(is.na(`19p`),"NA",`19p`),y=log2(`2.5uM`/100)))
+```
+

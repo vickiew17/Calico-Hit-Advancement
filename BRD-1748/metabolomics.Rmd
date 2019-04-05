@@ -1,0 +1,125 @@
+---
+title: "Metabolomics"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+Load things
+
+```{r}
+library(sets)
+library(useful)
+library(taigr)
+library(magrittr)
+library(plry)
+library(tidyverse)
+library(glmnet)
+library(ranger)
+library(pheatmap)
+library(RColorBrewer)
+library(prismr)
+library(piano)
+library(cdsr)
+library(ggthemes)
+library(scales)
+library(GSEABase)
+library(hrbrthemes)
+library(colorspace)
+library(ggrepel)
+library(cowplot)
+library(gridExtra)
+library(edgeR)
+library(reshape2)
+library(WGCNA)
+```
+
+Read in data
+
+```{r}
+data <- data.table::fread(file = "./Data/X0090_BRD1748_raw_data_composite-2019-02-07.csv")
+```
+
+Check total counts for each condition (column in data)
+
+```{r}
+#dat <- data %>% mutate(rownames = makeUnique(compound)) %>% column_to_rownames(var = "rownames") %>% dplyr::select(-compound)
+dat <- data %>% column_to_rownames(var = "compound") #%>% dplyr::select(-compound)
+dat[dat < 4000] <- 4000   # setting mincount to 4000
+#da <- dat
+#data$compound[duplicated(data$compound)]
+#duplicated(data$compound) %>% count
+
+#data %>% dplyr::filter(compound == "LPE(20:4)[M+H]+") %>% dplyr::select(-compound) %>% t() %>% set_colnames(c("var1","var2")) %>% as.data.frame() %>% ggplot + geom_point(aes(x=var1,y=var2)) + geom_abline'(slope = 1, intercept = 0)
+
+cpmdat <- cpm(dat, log = TRUE, prior.count = 0)
+cpmda <- cpmdat
+#cpmda[da == 0] <- NA   # because set mincount to 3000.
+```
+
+Omnibus thing
+
+```{r}
+meltedcpm <- cpmda %>% as.data.frame() %>% dplyr::select(contains("cjm_dmso_4hr"), contains("cjm_brd_4hr"))
+
+#metaslabeledcpmda <- cpmda %>% as.data.frame() %>% dplyr::mutate(cellline = ifelse())
+```
+
+
+Now, time for t-tests.
+
+```{r}
+# celllinelist <- c("cjm","639")
+# timepointlist <- c("4hr","8hr","24hr")
+# pvals <- data.frame(matrix(nrow = dim(cpmda)[1],ncol = 0))
+# 
+# for(cellline in celllinelist) {
+#     for(timepoint in timepointlist) {
+#         x <- cpmda %>% as.data.frame() %>% dplyr::select(contains(paste0(cellline,"_dmso_",timepoint)))
+#         y <- cpmda %>% as.data.frame() %>% dplyr::select(contains(paste0(cellline,"_brd_",timepoint)))
+#         
+#         blah <- apply(cbind(x,y), 1, function(q) ifelse(sum(is.na(q[1:3])) > 1 | sum(is.na(q[4:6])) > 1, NA, t.test(x=q[1:3],y=q[4:6], na.action = na.exclude)$p.value))
+#         blah2 <- apply(cbind(x,y), 1, function(q) ifelse(sum(is.na(q[1:3])) > 1 | sum(is.na(q[4:6])) > 1, NA, t.test(x=q[1:3],y=q[4:6], na.action = na.exclude)$statistic))
+#         pvals[[paste0("p.val_",cellline,"_",timepoint)]] <- blah
+#         pvals[[paste0("t.stat_",cellline,"_",timepoint)]] <- blah2
+#     }
+# }
+
+
+celllinelist <- c("cjm","639")
+timepointlist <- c("4hr","8hr","24hr")
+pvals <- data.frame(matrix(nrow = dim(cpmda)[1],ncol = 0)) %>% mutate(compound = rownames(cpmda))
+
+for(cellline in celllinelist) {
+    for(timepoint in timepointlist) {
+        x <- cpmda %>% as.data.frame() %>% dplyr::select(contains(paste0(cellline,"_dmso_",timepoint)))
+        y <- cpmda %>% as.data.frame() %>% dplyr::select(contains(paste0(cellline,"_brd_",timepoint)))
+        
+        blah <- apply(cbind(x,y), 1, function(q) ifelse(sum(is.na(q[1:3])) > 1 | sum(is.na(q[4:6])) > 1, NA, t.test(x=q[1:3],y=q[4:6], na.action = na.exclude)$statistic)) %>% 
+            as.data.frame %>% 
+            set_colnames(paste0("t.stat_",cellline,"_",timepoint)) %>% 
+            rownames_to_column(var = "compound")
+        
+        blah2 <- apply(cbind(x,y), 1, function(q) ifelse(sum(is.na(q[1:3])) > 1 | sum(is.na(q[4:6])) > 1, NA, t.test(x=q[1:3],y=q[4:6], na.action = na.exclude)$p.value)) %>% 
+            as.data.frame %>% 
+            set_colnames(paste0("p.val_",cellline,"_",timepoint)) %>% 
+            rownames_to_column(var = "compound")
+        
+        blah3 <- as.numeric(blah2[[paste0("p.val_",cellline,"_",timepoint)]]) %>% 
+            p.adjust(method = "BH") %>%
+            cbind(blah2$compound) %>% as.data.frame %>% 
+            set_colnames(c(paste0("p.adj_",cellline,"_",timepoint),"compound"))
+        
+        print(corner(blah3))
+        pvals %<>% left_join(blah, by = "compound") %>% left_join(blah2, by = "compound") %>% left_join(blah3, by = "compound")
+        
+        
+    }
+}
+
+#ggplot() + geom_density(aes(melt(x)$value),fill = "lightblue") +  geom_density(aes(melt(y)$value),fill = "salmon",alpha = 0.5)
+
+write_csv(pvals, path = "./metabolomics_dmso_brd_ttests_floor4000.csv")
+
+ggplot(pvals) + geom_density(aes(x = p.adj_cjm_4hr))
+```
+
