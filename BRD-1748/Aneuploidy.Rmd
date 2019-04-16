@@ -1,5 +1,5 @@
 ---
-title: "BRD-1748 Aneuploidy"
+title: "BRD-1748 Aneuploidy Exploration"
 author: "Vickie"
 date: "`r format(Sys.time(), '%d %B, %Y')`"
 output:
@@ -47,61 +47,129 @@ library(edgeR)
 library(matrixStats)
 library(ggtech)
 library(gg3D)
-library(Rtsne)
-library(umap)
+#library(Rtsne)
+#library(umap)
 library(WGCNA)
 library(plyr)
 library(dplyr)
+library(ggpubr)
 ```
 
-```{r}
+
+```{r, include = FALSE}
 aneutable <- readxl::read_excel("./aneuploidy_data_table_for_JamesRong.xlsx", sheet=1)
 aneutable %<>% dplyr::mutate(jul = as.numeric(jul_aneupl_score),abs = as.numeric(abs_arm_events), gistic = as.numeric(gistic_arm_dels)) %>% 
     dplyr::select(CCLE_ID, jul, abs, gistic)
+
+prism <- data.table::fread("./assaydata_BRD-K05641748-001-02-4.csv")
+
+viab.aneu <- left_join(prism,aneutable,by = c("Cell_line" = "CCLE_ID"))
+viab.aneu$binnedjul <- cut_number(viab.aneu$jul,4)
+viab.aneu$binnedabs <- cut_number(viab.aneu$abs,4)
+viab.aneu$binnedgistic <- cut_number(viab.aneu$gistic,4)
+
+armlevel <- data.table::fread("./CCLE_arms_annos_030716.txt")
+chr19p <- dplyr::select(armlevel, V1,`19p`)
+
+viab.aneu.19paneu <- left_join(viab.aneu, chr19p, by = c("Cell_line" = "V1")) 
+viab.aneu.19paneu %<>% dplyr::mutate(aneuploidy19p.num = ifelse(is.na(`19p`),NA,`19p`),aneuploidy19p.str = ifelse(is.na(`19p`),"NA",`19p`), logviability = log2(`2.5uM`/100))
+
+CCLE.depMap.19Q1.TPM <- load.from.taiga(data.name='depmap-rnaseq-expression-data-363a', data.version=15, data.file='CCLE_depMap_19Q1_TPM')
+
+CERS1exp <- CCLE.depMap.19Q1.TPM %>% as.data.frame %>% set_colnames(word(colnames(.))) %>% .$CERS1 %>% cbind(rownames(CCLE.depMap.19Q1.TPM)) %>% as.data.frame %>% set_colnames(c("CERS1", "lines"))
+CERS1exp$CCLE_name <- celllinemapr::arxspan.to.ccle(CERS1exp$lines)
+CERS1exp$CERS1 <- as.numeric(as.character(CERS1exp$CERS1))
+
+viab.aneu.19p.CERS1exp <- viab.aneu.19paneu %>% left_join(CERS1exp, by = c("Cell_line" = "CCLE_name"))
+```
+
+### CERS1 expression vs viability
+We observe that high CERS1 expression is associated with sensitivity to BRD-1748. We use log2-transformed TPM and log2-transformed counts for CERS1 expression and log viability measures, respectively.
+```{r}
+ggplot(viab.aneu.19p.CERS1exp) +geom_point(aes(y = pmax(logviability,-3),x = CERS1)) + labs(title = "CERS1 expression and viability")
+```
+
+### Total aneuploidy vs viability {.tabset}
+We examine the relationship between total aneuploidy and viability of cell lines. With all three aneuploidy metrics, there seems to be no significant correlation between total aneuploidy and viability.
+
+#### Taylor/jul
+```{r}
+viab.aneu.19p.CERS1exp %>% dplyr::filter(!is.na(jul)) %>% ggplot() + geom_boxplot(aes(y = logviability, x = binnedjul))
+
+viab.aneu.19p.CERS1exp %>% dplyr::filter(!is.na(jul)) %>% ggplot() + geom_point(aes(y = logviability, x = jul))
+```
+
+#### ABSOLUTE
+```{r}
+viab.aneu.19p.CERS1exp %>% dplyr::filter(!is.na(abs)) %>% ggplot() + geom_boxplot(aes(y = logviability, x = binnedabs))
+
+viab.aneu.19p.CERS1exp %>% dplyr::filter(!is.na(abs)) %>% ggplot() + geom_point(aes(y = logviability, x = abs))
+```
+
+#### GISTIC
+```{r}
+viab.aneu.19p.CERS1exp %>% dplyr::filter(!is.na(gistic)) %>% ggplot() + geom_boxplot(aes(y = logviability, x = binnedgistic))
+
+viab.aneu.19p.CERS1exp %>% dplyr::filter(!is.na(gistic)) %>% ggplot() + geom_point(aes(y = logviability, x = gistic))
+```
+
+### 19p aneuploidy event
+Since the CERS1 gene is found on chromosome 19p, we suspect there may be a relationship between 19p aneuploidy and cell line viability.
+
+We first confirm that across 19p aneuploidy classes, the relationship between high CERS1 expression and sensitivity is intact.
+```{r}
+ggplot(viab.aneu.19p.CERS1exp) + geom_point(aes(x = logviability,y = CERS1)) + labs(title = "CERS1 expression and viability grouped by Chr19p aneuploidy") + facet_grid(cols = vars(aneuploidy19p.num))
+```
+
+We examine the association of a 19p aneuploidy event on viability following treatment with BRD-1748. Surprisingly, a gain of 19p is associated with resistance. Viabilities of cell lines with loss of 19p are not significantly different than those with normal 19p.
+```{r}
+viab.aneu.19p.CERS1exp.noNA <- viab.aneu.19p.CERS1exp %>% dplyr::filter(!is.na(aneuploidy19p.num))
+mycomps <- combn(sort(unique(viab.aneu.19p.CERS1exp.noNA$aneuploidy19p.str)),m = 2,simplify = F)
+ggboxplot(data = viab.aneu.19p.CERS1exp.noNA, x = "aneuploidy19p.str", y = "logviability", order = sort(unique(viab.aneu.19p.CERS1exp$aneuploidy19p.str)), title = "PRISM viability following BRD-1748 treatment grouped by Chr19p aneuploidy") + stat_compare_means(comparisons = mycomps)
+```
+
+We also compare the differences in CERS1 expression across 19p aneuploidy events. It seems that cell lines with 19p loss have significantly lower CERS1 expression. However, a gain of 19p does not result in significantly higher expression.
+```{r}
+mycomps <- combn(sort(unique(viab.aneu.19p.CERS1exp.noNA$aneuploidy19p.str)),m = 2,simplify = F)
+ggboxplot(data = viab.aneu.19p.CERS1exp.noNA, x = "aneuploidy19p.str", y = "CERS1", order = sort(unique(viab.aneu.19p.CERS1exp$aneuploidy19p.str)), title = "Baseline CERS1 expression by Chr19p aneuploidy") + stat_compare_means(comparisons = mycomps)
+```
+
+This leads us to hypothesize that there is something else in the 19p aneuploidy information, that is not captured solely by the CERS1 expression.
+
+### Model comparison
+We compare a linear model regressing log viability on CERS1 expression versus a linear model regressing log viability on CERS1 expression and 19p aneuploidy annotation.
+
+```{r}
+#temptest <- viab.aneu.19p.CERS1exp %>% dplyr::mutate(aneuploidy19pt = 2*aneuploidy19p)
+viability.mod1 <- lm(logviability ~ CERS1, data = viab.aneu.19p.CERS1exp.noNA)
+viability.mod2 <- lm(logviability ~ CERS1 + aneuploidy19p.num, data = viab.aneu.19p.CERS1exp.noNA)
+
+anovares <- anova(viability.mod1,viability.mod2)
+pval <- anovares$`Pr(>F)`[2]
+```
+
+Model 1:
+```{r}
+viability.mod1
+```
+Model 2:
+```{r}
+viability.mod2
+```
+
+We find that including 19p aneuploidy annotations in the model yields a significant improvement over using just CERS1 expression (p-value = `r round(pval,4)`).
+
+
+```{r, eval = FALSE}
+# SCRATCH
 ggplot(aneutable) + geom_boxplot(aes(y=jul))
 
 quantile(aneutable$jul,na.rm = T)
 
+viab.aneu.19p.CERS1exp %>% ggplot() +
+    geom_boxplot(aes(x = ifelse(is.na(`19p`),"NA",`19p`),y=logviability)) + 
+    labs(y = "log viability", x = "19p aneuploidy", title = "PRISM viability following BRD-1748 treatment by Chr19p aneuploidy")
 
-prism <- data.table::fread("./assaydata_BRD-K05641748-001-02-4.csv")
-
-
-
-joint <- left_join(prism,aneutable,by = c("Cell_line" = "CCLE_ID"))
-joint$binnedjul <- cut_number(joint$jul,4)
-joint$binnedabs <- cut_number(joint$abs,4)
-joint$binnedgistic <- cut_number(joint$gistic,4)
-
-
-ggplot(joint) + geom_boxplot(aes(y = log2(`2.5uM`/100), x = binnedjul))
-ggplot(joint) + geom_boxplot(aes(y = `2.5uM`, x = binnedjul))
-
-ggplot(joint) + geom_point(aes(y = `2.5uM`, x = jul))
-
-
-
-ggplot(joint) + geom_boxplot(aes(y = `2.5uM`, x = binnedabs))
-
-ggplot(joint) + geom_point(aes(y = `2.5uM`, x = abs))
-
-
-
-ggplot(joint) + geom_boxplot(aes(y = `2.5uM`, x = binnedgistic))
-
-ggplot(joint) + geom_point(aes(y = `2.5uM`, x = gistic))
-
-
-ggplot(joint) + geom_point(aes(x=jul,y=abs))
-
-```
-
-```{r}
-armlevel <- data.table::fread("./CCLE_arms_annos_030716.txt")
-chr19 <- dplyr::select(armlevel, V1,`19p`)
-
-a <- left_join(prism,chr19, by = c("Cell_line" = "V1")) 
-
-a %>% ggplot() +
-    geom_boxplot(aes(x = ifelse(is.na(`19p`),"NA",`19p`),y=log2(`2.5uM`/100)))
+ggplot(dplyr::filter(viab.aneu.19p.CERS1exp,aneuploidy19p == -1)) +geom_point(aes(x = logviability,y = CERS1)) + labs(title = "CERS1 expression and viability for cells with 19p loss")
 ```
 
