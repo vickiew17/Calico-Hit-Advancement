@@ -81,6 +81,11 @@ CERS1exp$CCLE_name <- celllinemapr::arxspan.to.ccle(CERS1exp$lines)
 CERS1exp$CERS1 <- as.numeric(as.character(CERS1exp$CERS1))
 
 viab.aneu.19p.CERS1exp <- viab.aneu.19paneu %>% left_join(CERS1exp, by = c("Cell_line" = "CCLE_name"))
+
+otherCERSexp <- CCLE.depMap.19Q1.TPM %>% as.data.frame %>% dplyr::select(contains("CERS")) %>% set_colnames(word(colnames(.))) 
+rownames(otherCERSexp) <- celllinemapr::arxspan.to.ccle(rownames(otherCERSexp))
+otherCERSexp %<>% dplyr::select("CERS1", "CERS2", "CERS3", "CERS4", "CERS5", "CERS6", "CERS3-AS1", "CERS6-AS1")
+otherCERSexp.viab.aneu.19p <- otherCERSexp %>% rownames_to_column(var = "CCLE_name") %>% left_join(viab.aneu.19paneu, by = c("CCLE_name" = "Cell_line"))
 ```
 
 ### CERS1 expression vs viability
@@ -158,6 +163,32 @@ viability.mod2
 ```
 
 We find that including 19p aneuploidy annotations in the model yields a significant improvement over using just CERS1 expression (p-value = `r round(pval,4)`).
+
+### Other CERS {.tabset}
+
+Since the association between 19p aneuploidy, CERS1 expression, and sensitivity are not as simple as 19p aneuploidy affecting CERS1 expression, which determines sensitivity, we hypothesize that there may be some compensatory action from the other CERS genes when there is a 19p aneuploidy event. 
+
+We find the locations of the other CERS or CERS-related genes:
+
+- CERS2: 1q
+- CERS3: 15q
+- CERS4: 19p
+- CERS5: 12q
+- CERS6: 2q
+- CERS3AS1: 15q
+- CERS6AS1: 2q 
+
+```{r}
+out <- ''
+otherCERSlist <- c("CERS2", "CERS3", "CERS4", "CERS5", "CERS6", "CERS3-AS1", "CERS6-AS1")
+for (CERS in otherCERSlist) {
+    out = c(out, knitr::knit_expand(file = './markdown_helpers/otherCERS.Rmd'))
+}
+```
+
+`r paste(knitr::knit(text = out), collapse = '\n')`
+
+
 
 
 ```{r, eval = FALSE}

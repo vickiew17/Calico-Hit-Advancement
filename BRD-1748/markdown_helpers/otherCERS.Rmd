@@ -1,0 +1,9 @@
+#### {{CERS}}
+
+```{r {{CERS}}, include=TRUE, echo=FALSE}
+
+ggplot(otherCERSexp.viab.aneu.19p) + geom_point(aes(x = CERS1, y = `{{CERS}}`,color = aneuploidy19p.str))
+
+#ggplot(otherCERSexp) + geom_point(aes(x = CERS1, y = `CERS6-AS1`))
+```
+
