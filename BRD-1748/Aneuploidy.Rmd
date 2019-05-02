@@ -53,6 +53,7 @@ library(WGCNA)
 library(plyr)
 library(dplyr)
 library(ggpubr)
+library(pre)
 ```
 
 
@@ -69,10 +70,10 @@ viab.aneu$binnedabs <- cut_number(viab.aneu$abs,4)
 viab.aneu$binnedgistic <- cut_number(viab.aneu$gistic,4)
 
 armlevel <- data.table::fread("./CCLE_arms_annos_030716.txt")
-chr19p <- dplyr::select(armlevel, V1,`19p`)
+chr19p <- dplyr::select(armlevel, V1,`19p`,`15`)
 
 viab.aneu.19paneu <- left_join(viab.aneu, chr19p, by = c("Cell_line" = "V1")) 
-viab.aneu.19paneu %<>% dplyr::mutate(aneuploidy19p.num = ifelse(is.na(`19p`),NA,`19p`),aneuploidy19p.str = ifelse(is.na(`19p`),"NA",`19p`), logviability = log2(`2.5uM`/100))
+viab.aneu.19paneu %<>% dplyr::mutate(aneuploidy19p.num = ifelse(is.na(`19p`),NA,`19p`),aneuploidy19p.str = ifelse(is.na(`19p`),"NA",`19p`), logviability = log2(`2.5uM`/100), aneuploidy15.num = ifelse(is.na(`15`),NA,`15`),aneuploidy15.str = ifelse(is.na(`15`),"NA",`15`))
 
 CCLE.depMap.19Q1.TPM <- load.from.taiga(data.name='depmap-rnaseq-expression-data-363a', data.version=15, data.file='CCLE_depMap_19Q1_TPM')
 
@@ -80,7 +81,7 @@ CERS1exp <- CCLE.depMap.19Q1.TPM %>% as.data.frame %>% set_colnames(word(colname
 CERS1exp$CCLE_name <- celllinemapr::arxspan.to.ccle(CERS1exp$lines)
 CERS1exp$CERS1 <- as.numeric(as.character(CERS1exp$CERS1))
 
-viab.aneu.19p.CERS1exp <- viab.aneu.19paneu %>% left_join(CERS1exp, by = c("Cell_line" = "CCLE_name"))
+viab.aneu.19p.CERS1exp <- viab.aneu.19paneu %>% inner_join(CERS1exp, by = c("Cell_line" = "CCLE_name"))
 
 otherCERSexp <- CCLE.depMap.19Q1.TPM %>% as.data.frame %>% dplyr::select(contains("CERS")) %>% set_colnames(word(colnames(.))) 
 rownames(otherCERSexp) <- celllinemapr::arxspan.to.ccle(rownames(otherCERSexp))
@@ -146,11 +147,14 @@ We compare a linear model regressing log viability on CERS1 expression versus a 
 
 ```{r}
 #temptest <- viab.aneu.19p.CERS1exp %>% dplyr::mutate(aneuploidy19pt = 2*aneuploidy19p)
-viability.mod1 <- lm(logviability ~ CERS1, data = viab.aneu.19p.CERS1exp.noNA)
-viability.mod2 <- lm(logviability ~ CERS1 + aneuploidy19p.num, data = viab.aneu.19p.CERS1exp.noNA)
+viab.aneu.19p.CERS1exp.noNA.formodel <- viab.aneu.19p.CERS1exp.noNA %>% dplyr::mutate_at(c("CERS1","aneuploidy19p.num"),funs(c(scale(.)))) 
+
+viability.mod1 <- lm(logviability ~ CERS1, data = viab.aneu.19p.CERS1exp.noNA.formodel)
+viability.mod2 <- lm(logviability ~ CERS1 + aneuploidy19p.num, data = viab.aneu.19p.CERS1exp.noNA.formodel)
 
 anovares <- anova(viability.mod1,viability.mod2)
 pval <- anovares$`Pr(>F)`[2]
+#pval
 ```
 
 Model 1:
@@ -161,6 +165,14 @@ Model 2:
 ```{r}
 viability.mod2
 ```
+
+```{r}
+pred <- viability.mod2$fitted.values %>% cbind(viab.aneu.19p.CERS1exp.noNA.formodel) %>% dplyr::rename("ypred" = '.')
+
+ggplot(pred) + geom_point(aes(x=logviability,y=ypred)) + geom_abline(aes(slope = 1, intercept = 0)) +#+ geom_smooth(aes(x=logviability,y=ypred),method = "lm") + 
+    labs(subtitle = paste0("R^2 = ",(1-mean(viability.mod2$residuals^2)/var(pred$logviability))))
+```
+
 
 We find that including 19p aneuploidy annotations in the model yields a significant improvement over using just CERS1 expression (p-value = `r round(pval,4)`).
 
@@ -188,6 +200,145 @@ for (CERS in otherCERSlist) {
 
 `r paste(knitr::knit(text = out), collapse = '\n')`
 
+### CERS3
+
+The expression pattern of CERS3 is interesting: there are no cell lines with high CERS3 and CERS1 expression. In addition, there are no cell lines with high CERS3 expression that have gain of 19p.
+
+```{r}
+otherCERSexp.viab.aneu.19p.noNA <- otherCERSexp.viab.aneu.19p %>% dplyr::filter(!is.na(aneuploidy19p.num))
+
+ggplot(otherCERSexp.viab.aneu.19p.noNA) + geom_point(aes(x = CERS1, y = CERS3,color = as.factor(aneuploidy19p.num)),size = 2) + theme(legend.position = "bottom")
+```
+
+```{r}
+#mycomps <- combn(sort(unique(otherCERSexp.viab.aneu.19p.noNA$aneuploidy19p.str)),m = 2,simplify = F)
+ggboxplot(data = otherCERSexp.viab.aneu.19p.noNA, x = "aneuploidy19p.str", y = "CERS3", order = sort(unique(otherCERSexp.viab.aneu.19p.noNA$aneuploidy19p.str)), title = "Baseline CERS3 expression by Chr19p aneuploidy") #+ stat_compare_means(comparisons = mycomps)
+```
+
+We compare a linear model regressing log viability on CERS1 expression and 19p aneuploidy versus a linear model regressing log viability on CERS1 expression, 19p aneuploidy annotation, and CERS3 expression.
+
+```{r}
+otherCERSexp.viab.aneu.19p.noNA.formodel <- otherCERSexp.viab.aneu.19p.noNA %>% dplyr::mutate_at(c("CERS1","aneuploidy19p.num","CERS3"),funs(c(scale(.)))) 
+#otherCERSexp.viab.aneu.19p15.noNA <- otherCERSexp.viab.aneu.19p %>% 
+#    dplyr::filter(!is.na(aneuploidy19p.num),!is.na(aneuploidy15.num)) %>% dplyr::filter(aneuploidy15.num > -1)
+viability.mod3 <- lm(logviability ~ CERS1 + aneuploidy19p.num, data = otherCERSexp.viab.aneu.19p.noNA)
+viability.mod4 <- lm(logviability ~ CERS1 + aneuploidy19p.num + CERS3, data = otherCERSexp.viab.aneu.19p.noNA)
+
+anovares <- anova(viability.mod3,viability.mod4)
+pval <- anovares$`Pr(>F)`[2]
+#pval
+```
+
+Model 1:
+```{r}
+viability.mod3
+```
+Model 2:
+```{r}
+viability.mod4
+```
+
+```{r}
+pred <- viability.mod4$fitted.values %>% cbind(otherCERSexp.viab.aneu.19p.noNA.formodel) %>% dplyr::rename("ypred" = '.')
+
+ggplot(pred) + geom_point(aes(x=logviability,y=ypred)) + geom_abline(aes(slope = 1, intercept = 0)) +# geom_smooth(aes(x=logviability,y=ypred),method = "lm") +
+    labs(subtitle = paste0("R^2 = ",(1-mean(viability.mod4$residuals^2)/var(pred$logviability)))) #+ facet_grid(rows = vars(aneuploidy15.str),cols = vars(aneuploidy19p.str))
+```
+
+The model that includes CERS3 expression performs very slightly better than the one only including CERS1 expression and 19p aneuploidy.
+
+### Serine synthesis genes
+
+We include the expression of serine synthesis pathway genes, in addition to the expression of CERS and CERS-related genes and chromosomes 15 and 19p aneuploidy annotations, and perform linear regression on the log viability. The coefficients assigned by the model are shown below.
+
+```{r}
+sergenes <- c("PHGDH","PSAT1","PSPH","SPTLC1","SPTLC2","SPTLC3")
+serexp <- CCLE.depMap.19Q1.TPM %>% as.data.frame %>% set_colnames(make.unique(word(colnames(.)))) %>% dplyr::select(sergenes) %>% cbind(rownames(CCLE.depMap.19Q1.TPM)) %>% as.data.frame %>% set_colnames(c(sergenes, "lines"))
+serexp$CCLE_name <- celllinemapr::arxspan.to.ccle(CERS1exp$lines)
+#serexp %<>% #dplyr::mutate_if(is.numeric <- as.numeric(as.character(CERS1exp$CERS1))
+
+serexp.otherCERSexp.viab.aneu.19p <- serexp %>% dplyr::right_join(otherCERSexp.viab.aneu.19p,by = "CCLE_name")
+
+serexp.otherCERSexp.viab.aneu.19p.formodel <- serexp.otherCERSexp.viab.aneu.19p %>% dplyr::select(-lines,-CCLE_name,-`2.5uM`,-binnedjul,-binnedabs,-binnedgistic,-`19p`,-`15`,-aneuploidy19p.str, -aneuploidy15.str, -AUC) %>% scale %>% as.data.frame#, -jul,-abs,-gistic) #%>% dplyr::filter(!is.na(logviability))
+
+viability.all <- lm(logviability ~ ., data = serexp.otherCERSexp.viab.aneu.19p.formodel)
+
+modelallcoeffs <- viability.all$coefficients %>% sort %>% as.data.frame %>% set_colnames("coeff") %>% rownames_to_column(var = "term")
+
+p <- modelallcoeffs %>% #dplyr::filter(abs(coeff) > 0.5) %>%
+    ggplot() + geom_point(aes(x=factor(term,levels = modelallcoeffs$term),y=coeff),size = 2) + theme(axis.text.x = element_text(angle = 45, hjust = 1)) + geom_abline(aes(slope=0,intercept=0)) + labs(x = "feature")#+ ylim(-10,10)
+p
+```
+
+```{r}
+d <- dplyr::rename(serexp.otherCERSexp.viab.aneu.19p.formodel,"CERS3AS1" = `CERS3-AS1`, "CERS6AS1" = `CERS6-AS1`) %>%
+    dplyr::filter(!is.na(logviability))
+```
+
+To improve interpretability and observe interactions between the features, we derive a prediction rule ensemble using the "pre" R package. This model achieves an R^2 value of `r 1-(round(0.8866958,4)/round(var(d$logviability),4))`. The rules in the ensemble represented as decision trees are as follows:
+
+```{r, eval = F}
+set.seed(17)
+viab.ens <- pre(logviability ~ ., data = d)
+plot(viab.ens, nterms = 14, cex = 0.6)
+
+# jpeg(file = "viab.ens.fig2.jpg",width = 960, height = 672)
+# plot(viab.ens, nterms = 15, cex = 1)
+# dev.off()
+```
+
+`r knitr::include_graphics("./viab.ens.fig1.jpg")`
+
+`r knitr::include_graphics("./viab.ens.fig2.jpg")`
+
+```{r, eval = F}
+set.seed(21)
+cv <- cvpre(viab.ens)
+cv$accuracy$MSE[1] # 0.8866958
+```
+
+
+
+
+
+
+
+```{r, eval = F}
+#mycomps <- combn(sort(unique(otherCERSexp.viab.aneu.19p.noNA$aneuploidy15.str)),m = 2,simplify = F)
+ggboxplot(data = otherCERSexp.viab.aneu.19p.noNA, x = "aneuploidy15.str", y = "CERS3", order = sort(unique(otherCERSexp.viab.aneu.19p.noNA$aneuploidy19p.str)), title = "Baseline CERS3 expression by Chr19p aneuploidy")# + stat_compare_means(comparisons = mycomps)
+```
+
+
+```{r, eval = F}
+serexp.otherCERSexp.viab.aneu.19p.formodel <- serexp.otherCERSexp.viab.aneu.19p %>% dplyr::select(-lines,-CCLE_name,-`2.5uM`,-binnedjul,-binnedabs,-binnedgistic,-`19p`,-`15`,-aneuploidy19p.str, -aneuploidy15.str, -AUC) %>% scale %>% as.data.frame#, -jul,-abs,-gistic) #%>% dplyr::filter(!is.na(logviability))
+viability.all <- lm(logviability ~ .^2, data = serexp.otherCERSexp.viab.aneu.19p.formodel)
+
+modelallcoeffs <- viability.all$coefficients %>% sort %>% as.data.frame %>% set_colnames("coeff") %>% rownames_to_column(var = "term")
+
+p <- modelallcoeffs %>% dplyr::filter(abs(coeff) > 0.5) %>%
+    ggplot() + geom_point(aes(x=factor(term,levels = modelallcoeffs$term),y=coeff)) + theme(axis.text.x = element_text(angle = 75)) + geom_abline(aes(slope=0,intercept=0)) + labs(x = "feature")#+ ylim(-10,10)
+plotly::ggplotly(p)
+```
+
+```{r,eval = F}
+ggplot(serexp.otherCERSexp.viab.aneu.19p.formodel) + geom_point(aes(x=logviability,y=`CERS3-AS1`))+ geom_smooth(aes(x=logviability,y=`CERS3-AS1`),method = "lm")
+```
+
+```{r,eval = F}
+serexp.otherCERSexp.viab.aneu.19p %>% dplyr::filter(!is.na(logviability)) %>% 
+ggplot() + geom_point(aes(x=CERS1,y=CERS3,color = logviability < log2(.5)),size = 3,alpha = 0.5) + facet_wrap(aneuploidy19p.num~.)
+
+
+fit = lm(logviability ~ ., data = serexp.otherCERSexp.viab.aneu.19p.formodel)
+ann = car::Anova(fit,type = 2, white.adjust = TRUE)#,singular.ok = TRUE)
+```
+
+```{r,eval = F}
+par(mfrow=c(3,3))
+plot(logviability ~ ., data = serexp.otherCERSexp.viab.aneu.19p.formodel)
+
+#boxplot(logviability ~ ., data = serexp.otherCERSexp.viab.aneu.19p.formodel)
+```
 
 
 
