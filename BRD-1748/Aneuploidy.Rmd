@@ -271,11 +271,14 @@ p
 ```
 
 ```{r}
-d <- dplyr::rename(serexp.otherCERSexp.viab.aneu.19p.formodel,"CERS3AS1" = `CERS3-AS1`, "CERS6AS1" = `CERS6-AS1`) %>%
+d <- serexp.otherCERSexp.viab.aneu.19p %>%
+    dplyr::select(-lines,-CCLE_name,-`2.5uM`,-binnedjul,-binnedabs,-binnedgistic,-`19p`,-`15`,-aneuploidy19p.str, -aneuploidy15.str, -AUC) %>%
+    as.data.frame %>%
+    dplyr::rename("CERS3AS1" = `CERS3-AS1`, "CERS6AS1" = `CERS6-AS1`) %>%
     dplyr::filter(!is.na(logviability))
 ```
 
-To improve interpretability and observe interactions between the features, we derive a prediction rule ensemble using the "pre" R package. This model achieves an R^2 value of `r 1-(round(0.8866958,4)/round(var(d$logviability),4))`. The rules in the ensemble represented as decision trees are as follows:
+To improve interpretability and observe interactions between the features, we derive a prediction rule ensemble using the "pre" R package. This model achieves an R^2 value of `r 1-(round(0.8866958/var(d$logviability),4))`. The rules in the ensemble represented as decision trees are as follows:
 
 ```{r, eval = F}
 set.seed(17)
