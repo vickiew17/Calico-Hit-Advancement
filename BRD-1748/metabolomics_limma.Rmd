@@ -1,0 +1,260 @@
+---
+title: "Metabolomics Limma"
+author: "*Vickie*"
+date: "*`r format(Sys.time(), '%d %B, %Y')`*"
+output: 
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+    theme: spacelab
+editor_options: 
+  chunk_output_type: console
+---
+```{r, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, include=FALSE, fig.align = 'center', fig.width = 10, fig.height = 7)
+```
+
+
+```{r}
+#Load things
+library(sets)
+library(useful)
+library(taigr)
+library(magrittr)
+library(plyr)
+library(tidyverse)
+library(glmnet)
+library(ranger)
+library(pheatmap)
+library(RColorBrewer)
+library(prismr)
+library(piano)
+library(cdsr)
+library(ggthemes)
+library(scales)
+#library(GSEABase)
+library(hrbrthemes)
+library(colorspace)
+library(ggrepel)
+library(cowplot)
+library(gridExtra)
+library(edgeR)
+library(reshape2)
+library(WGCNA)
+library(plotly)
+library(limma)
+library(edgeR)
+library(biomaRt)
+library(reshape)
+```
+
+
+
+```{r}
+#Read in data
+#data <- data.table::fread(file = "./Data/X0090_BRD1748_raw_data_composite-2019-02-07.csv")
+data <- data.table::fread(file = "./Data/19_0425_RONG_CERS1_CP_Results_V2_1.csv")
+```
+
+
+
+```{r}
+#Check total counts for each condition (column in data)
+
+#dat <- data %>% mutate(rownames = makeUnique(compound)) %>% column_to_rownames(var = "rownames") %>% dplyr::select(-compound)
+#dat <- data %>% column_to_rownames(var = "compound") #%>% dplyr::select(-compound)
+dat <- data %>% as.data.frame %>% dplyr::select(-starts_with("PREF")) %>% 
+    dplyr::mutate(Compound = ifelse(Metabolite == "", Compound, Metabolite)) %>% #column_to_rownames(var = "Compound") %>%
+    dplyr::select(-MZ,-RT,-HMDB,-Assignment_certainty,-Metabolite)
+#dat[dat < 4000 | is.na(dat)] <- 4000   # setting mincount to 4000
+dat %<>% #dplyr::filter(rowSums(is.na(dat))<40) %>%
+    column_to_rownames(var = "Compound")
+dat[is.na(dat) | dat < 1000] <- 1000
+colnames(dat) %<>% str_replace_all('_CERS1', '-CERS1') 
+
+x <- NA
+x <- DGEList(counts = dat)
+print(dim(x))
+
+#x also stores library size, which is just sum of read counts over rows
+stopifnot(cbind(colSums(x$counts) == x$samples$lib.size))
+
+head(x$counts) %>% DT::datatable()
+
+x$samples$group <- x$samples %>% rownames() %>% word(sep = fixed("_"), 1,3)
+x$samples$cellline <- x$samples$group %>% word(sep = fixed("_"),1)
+x$samples$treatment <- x$samples$group %>% word(sep = fixed("_"),2)
+x$samples$timepoint <- x$samples$group %>% word(sep = fixed("_"),3)
+x$samples$replicate <- x$samples %>% rownames() %>% word(sep = fixed("_"), 4)
+
+x$samples %>% DT::datatable()
+
+metid <- rownames(x)
+x$mets <- metid %>% as.data.frame %>% set_colnames("met")#package gene information along with DGE object
+x$mets %>% head %>% DT::datatable()
+```
+
+```{r}
+#prior_count <- 1
+g1 <- log10(x$counts) %>% #logCPM
+    melt() %>% #convert to long-form (for input to ggplot)
+    ggplot(aes(value, color = X2)) + #make a separate density plot for each sample
+        geom_density(show.legend = F) +
+        xlab('log CPM')
+g1
+
+x$counts[x$counts == 0] <- NA
+lcpm <- log2(x$counts)
+```
+
+```{r}
+g1 <- ggplot(melt(lcpm), aes(2^value)) + xlab('CPM') + geom_histogram() + ggtitle('CPM')
+g2 <- ggplot(melt(lcpm), aes(value)) + xlab('log CPM') + geom_histogram() + ggtitle('Log CPM')
+plot_grid(g1, g2, ncol=2)
+
+plotMDS(lcpm, labels=x$samples$group)
+plotMDS(lcpm, labels=x$samples$cellline)
+plotMDS(lcpm, labels=x$samples$treatment)
+plotMDS(lcpm, labels=x$samples$timepoint)
+plotMDS(lcpm, labels=x$samples$replicate)
+```
+
+
+```{r}
+sampleDists <- as.matrix(dist(t(lcpm)))
+annotation_col <- data.frame(group = x$samples$group, cellline = x$samples$cellline, treatment = x$samples$treatment, timepoint = x$samples$timepoint, replicate = x$samples$replicate) %>% set_rownames(rownames(x$samples))
+pheatmap::pheatmap(sampleDists,
+                   annotation_col = annotation_col,
+                   color = colorRampPalette(c("navy", "white", "firebrick3"))(50))
+
+#rownames(x$samples) <- make.names(rownames(x$samples))
+#colnames(x$counts) <- make.names(colnames(x$counts))
+
+x$samples$groupnames <- make.names(x$samples$group)
+design <- model.matrix(~0 + groupnames, x$samples)
+colnames(design) <- gsub("groupnames", "", colnames(design))
+design
+
+contr.matrix <- makeContrasts(
+   `639V_BRD-1748_4Hours::639V_DMSO_4Hours` = `X639V_BRD.1748_4Hours` - `X639V_DMSO_4Hours`, 
+   `639V_P059_4Hours::639V_DMSO_4Hours` = `X639V_P059_4Hours` - `X639V_DMSO_4Hours`, 
+   `639V_BRD-1748-P059_4Hours::639V_BRD-1748_4Hours` = `X639V_BRD.1748.P059_4Hours` - `X639V_BRD.1748_4Hours`, 
+   `639V_BRD-1748-P059_4Hours::639V_P059_4Hours` = `X639V_BRD.1748.P059_4Hours` - `X639V_P059_4Hours`, 
+   `CJM_BRD-1748_4Hours::CJM_DMSO_4Hours` = `CJM_BRD.1748_4Hours` - `CJM_DMSO_4Hours`, 
+   `CJM_BRD-1748-P059_4Hours::CJM_BRD-1748_4Hours` = `CJM_BRD.1748.P059_4Hours` - `CJM_BRD.1748_4Hours`, 
+   `CJM-CERS1_BRD-1748_4Hours::CJM-CERS1_DMSO_4Hours` = `CJM.CERS1_BRD.1748_4Hours` - `CJM.CERS1_DMSO_4Hours`, 
+   `CJM-CERS1_BRD-1748-P059_4Hours::CJM-CERS1_BRD-1748_4Hours` = `CJM.CERS1_BRD.1748.P059_4Hours` - `CJM.CERS1_BRD.1748_4Hours`, 
+   `CJM_BRD-1748_4Hours::CJM-CERS1_BRD-1748_4Hours` = `CJM_BRD.1748_4Hours` - `CJM.CERS1_BRD.1748_4Hours`, 
+   `639V_BRD-1748_8Hours::639V_DMSO_8Hours` = `X639V_BRD.1748_8Hours` - `X639V_DMSO_8Hours`, 
+   `639V_P059_8Hours::639V_DMSO_8Hours` = `X639V_P059_8Hours` - `X639V_DMSO_8Hours`, 
+   `639V_BRD-1748-P059_8Hours::639V_BRD-1748_8Hours` = `X639V_BRD.1748.P059_8Hours` - `X639V_BRD.1748_8Hours`, 
+   `639V_BRD-1748-P059_8Hours::639V_P059_8Hours` = `X639V_BRD.1748.P059_8Hours` - `X639V_P059_8Hours`, 
+   `CJM_BRD-1748_8Hours::CJM_DMSO_8Hours` = `CJM_BRD.1748_8Hours` - `CJM_DMSO_8Hours`, 
+   `CJM_BRD-1748-P059_8Hours::CJM_BRD-1748_8Hours` = `CJM_BRD.1748.P059_8Hours` - `CJM_BRD.1748_8Hours`, 
+   `CJM-CERS1_BRD-1748_8Hours::CJM-CERS1_DMSO_8Hours` = `CJM.CERS1_BRD.1748_8Hours` - `CJM.CERS1_DMSO_8Hours`, 
+   `CJM-CERS1_BRD-1748-P059_8Hours::CJM-CERS1_BRD-1748_8Hours` = `CJM.CERS1_BRD.1748.P059_8Hours` - `CJM.CERS1_BRD.1748_8Hours`,
+   `CJM_BRD-1748_8Hours::CJM-CERS1_BRD-1748_8Hours` = `CJM_BRD.1748_8Hours` - `CJM.CERS1_BRD.1748_8Hours`, 
+   levels = colnames(design))
+contr.matrix
+```
+
+```{r}
+#x$samples$lib.size <- 1e6 - 1
+#voom(x, design, plot=TRUE)
+vfit <- lmFit(log2(x$counts), design) #fits the model
+vfit <- contrasts.fit(vfit, contrasts=contr.matrix) #extracts the info we need for the comparisons we're interested in
+efit <- eBayes(vfit, trend = T) #This step allows the model to 'pool' information across genes and gain statistical power
+plotSA(efit, main="Final model: Mean−variance trend")
+
+summary(decideTests(efit))
+# 
+# par(mfrow=c(1,2))
+# x$samples$lib.size <- 1
+# v <- voom(x, design, plot=TRUE) #this operates on the normalized rounts data
+# vfit <- lmFit(v, design) #fits the model
+# vfit <- contrasts.fit(vfit, contrasts=contr.matrix) #extracts the info we need for the comparisons we're interested in
+# efit <- eBayes(vfit) #This step allows the model to 'pool' information across genes and gain statistical power
+# plotSA(efit, main="Final model: Mean−variance trend")
+# par(mfrow=c(1,1))
+# 
+# summary(decideTests(efit))
+```
+
+### Differentially expressed metabolites {.tabset}
+
+We use limma to identify differentially expressed metabolites between pairs of conditions of interest. Each tab is labeled A::B, denoting the difference A - B. Each tab contains a volcano plot of the metabolites as well as the table used to generate the plot. The p-values are adjusted for multiple testing using the Benjamini-Hochberg procedure.
+
+```{r, include = T}
+out <- ''
+contrastslist <- colnames(contr.matrix)
+for (contrast in contrastslist) {
+    out = c(out, knitr::knit_expand(file = './markdown_helpers/limma_detable.Rmd'))
+}
+```
+
+`r paste(knitr::knit(text = out), collapse = '\n')`
+
+```{r, eval = F}
+#Check things
+x$counts %>% 
+    melt() %>% 
+    dplyr::rename("metabolite" = X1, "condition" = X2) %>%
+    dplyr::mutate(condition = word(condition, sep = fixed("_"), 1, 3)) %>% 
+    dplyr::filter(metabolite == "QI5721") %>%
+    ggplot() + geom_boxplot(aes(x = condition, y = log2(value))) +
+    coord_flip()
+```
+
+```{r, eval = F}
+setwd("~/Documents/CalicoHITTA/Calico-Hit-Advancement/BRD-1748/limma_detables/")
+bigtable <- NA
+for(fname in list.files("~/Documents/CalicoHITTA/Calico-Hit-Advancement/BRD-1748/limma_detables/")) {
+    #fname <- list.files("~/Documents/CalicoHITTA/Calico-Hit-Advancement/BRD-1748/limma_detables/")[1]
+    f <- data.table::fread(fname) %>% as.data.frame
+    f %<>% dplyr::select(compound, logFC, t, P.Value, adj.P.Val) 
+    
+    colnames(f)[2:5] <- paste0(word(fname,sep = fixed(".")),".",colnames(f)[2:5])
+    if(is.na(bigtable)) {
+        bigtable <- f
+    } else {
+        bigtable %<>% left_join(f)
+    }
+}
+
+write_csv(bigtable, "~/Documents/CalicoHITTA/Calico-Hit-Advancement/BRD-1748/combined_detables.csv")
+
+metabolites <- rownames(dat)
+dattidy <- dat %>% t %>% as.data.frame %>% 
+    rownames_to_column(var = "sample") %>% 
+    dplyr::mutate(sample = str_replace_all(.$sample, '_CERS1', '-CERS1')) %>%
+    dplyr::mutate(group = word(sample,1,3,sep = fixed("_"))) %>%
+    # dplyr::mutate(cellline = word(sample,sep = fixed("_")), trt = word(sample,2,sep = fixed("_")),
+    #               time = word(sample,3,sep = fixed("_")),
+    #               rep = word(sample,4,sep = fixed("_"))) %>%
+    dplyr::select(-sample) %>%
+    tidyr::gather(metabolites, key = "mtb",value = "count")
+
+datstats <- dattidy %>% dplyr::group_by(group, mtb) %>% 
+    dplyr::summarize(mean = mean(count), stddev = sqrt(var(count)))
+
+meantable <- datstats %>% 
+    dplyr::select(-stddev) %>% 
+    spread(key = group, value = mean) %>% 
+    column_to_rownames(var = "mtb") %>%
+    set_colnames(paste0(colnames(.),".mean")) %>%
+    rownames_to_column(var = "compound")
+
+stddevtable <- datstats %>% 
+    dplyr::select(-mean) %>% 
+    spread(key = group, value = stddev) %>% 
+    column_to_rownames(var = "mtb") %>%
+    set_colnames(paste0(colnames(.),".stddev")) %>%
+    rownames_to_column(var = "compound")
+
+#bigtable %>% left_join(meantable) %>% left_join(stddevtable) %>% write_csv(path = "~/Documents/CalicoHITTA/Calico-Hit-Advancement/BRD-1748/combined_detables_stats.csv")
+```
+
+```{r, eval = F}
+cdsr::cds_render(path_to_rmd = "~/Documents/CalicoHITTA/Calico-Hit-Advancement/BRD-1748/metabolomics_limma.Rmd", path_to_html = "~/Documents/CalicoHITTA/Calico-Hit-Advancement/BRD-1748/metabolomics_limma.html", folder = "vwang")
+```

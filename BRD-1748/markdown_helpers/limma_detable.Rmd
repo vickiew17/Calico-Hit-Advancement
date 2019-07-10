@@ -1,0 +1,18 @@
+#### {{contrast}}
+
+```{r {{contrast}}, include=TRUE, echo=FALSE}
+de_table <- topTable(efit, coef = '{{contrast}}', n=Inf) 
+
+de_table %>%
+    ggplot(aes(logFC, -log10(adj.P.Val))) + 
+    geom_point(alpha = 0.5) + 
+    geom_text_repel(data = de_table %>% rownames_to_column(var = "SYMBOL") %>% arrange(desc(abs(logFC))) %>% head(30), 
+                    aes(label = SYMBOL))
+
+de_table %>% 
+    DT::datatable()
+
+de_table %>% rownames_to_column(var = "compound") %>%
+    write_csv(path = paste0("~/Documents/CalicoHITTA/Calico-Hit-Advancement/BRD-1748/limma_detables/", '{{contrast}}',".csv"))
+```
+

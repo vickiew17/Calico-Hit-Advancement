@@ -11,7 +11,7 @@ library(sets)
 library(useful)
 library(taigr)
 library(magrittr)
-library(plry)
+library(plyr)
 library(tidyverse)
 library(glmnet)
 library(ranger)
@@ -22,7 +22,7 @@ library(piano)
 library(cdsr)
 library(ggthemes)
 library(scales)
-library(GSEABase)
+#library(GSEABase)
 library(hrbrthemes)
 library(colorspace)
 library(ggrepel)
@@ -37,6 +37,7 @@ Read in data
 
 ```{r}
 data <- data.table::fread(file = "./Data/X0090_BRD1748_raw_data_composite-2019-02-07.csv")
+data <- data.table::fread(file = "./Data/19_0425_RONG_CERS1_CP_Results_V2_1.csv")
 ```
 
 Check total counts for each condition (column in data)
@@ -44,7 +45,9 @@ Check total counts for each condition (column in data)
 ```{r}
 #dat <- data %>% mutate(rownames = makeUnique(compound)) %>% column_to_rownames(var = "rownames") %>% dplyr::select(-compound)
 dat <- data %>% column_to_rownames(var = "compound") #%>% dplyr::select(-compound)
-dat[dat < 4000] <- 4000   # setting mincount to 4000
+dat <- data %>% as.data.frame %>% dplyr::select(-starts_with("PREF")) %>% column_to_rownames(var = "Compound") %>%
+    dplyr::select(-MZ,-RT,-HMDB,-Assignment_certainty,-Metabolite)
+dat[dat < 4000 | is.na(dat)] <- 4000   # setting mincount to 4000
 #da <- dat
 #data$compound[duplicated(data$compound)]
 #duplicated(data$compound) %>% count
@@ -121,5 +124,120 @@ for(cellline in celllinelist) {
 write_csv(pvals, path = "./metabolomics_dmso_brd_ttests_floor4000.csv")
 
 ggplot(pvals) + geom_density(aes(x = p.adj_cjm_4hr))
+```
+
+```{r}
+celllinelist <- c("CJM","CJM_CERS1","639V")
+timepointlist <- c("4Hours","8Hours")
+treatmentlist <- c("BRD-1748","P059","BRD-1748-P059")
+ctrl <- "DMSO"
+pvals <- data.frame(matrix(nrow = dim(cpmda)[1],ncol = 0)) %>% mutate(compound = rownames(cpmda))
+
+for(trt in treatmentlist) {
+    for(cellline in celllinelist) {
+        for(timepoint in timepointlist) {
+            x <- cpmda %>% as.data.frame() %>% dplyr::select(contains(paste0(cellline,"_",ctrl,"_",timepoint)))
+            y <- cpmda %>% as.data.frame() %>% dplyr::select(contains(paste0(cellline,"_",trt,"_",timepoint)))
+            
+            blah <- apply(cbind(x,y), 1, function(q) ifelse(sum(is.na(q[1:3])) > 1 | sum(is.na(q[4:6])) > 1, NA, t.test(x=q[1:3],y=q[4:6], na.action = na.exclude)$statistic)) %>% 
+                as.data.frame %>% 
+                set_colnames(paste0("t.stat_",cellline,"_",trt,"_",timepoint)) %>% 
+                rownames_to_column(var = "compound")
+            
+            blah2 <- apply(cbind(x,y), 1, function(q) ifelse(sum(is.na(q[1:3])) > 1 | sum(is.na(q[4:6])) > 1, NA, t.test(x=q[1:3],y=q[4:6], na.action = na.exclude)$p.value)) %>% 
+                as.data.frame %>% 
+                set_colnames(paste0("p.val_",cellline,"_",trt,"_",timepoint)) %>% 
+                rownames_to_column(var = "compound")
+            
+            blah3 <- as.numeric(blah2[[paste0("p.val_",cellline,"_",trt,"_",timepoint)]]) %>% 
+                p.adjust(method = "BH") %>% as.data.frame %>%
+                cbind(blah2$compound) %>% #as.data.frame %>% 
+                set_colnames(c(paste0("p.adj_",cellline,"_",trt,"_",timepoint),"compound")) 
+            
+            print(corner(blah3))
+            pvals %<>% left_join(blah, by = "compound") %>% left_join(blah2, by = "compound") %>% left_join(blah3, by = "compound")
+            
+            
+        }
+    }
+}
+
+#ggplot() + geom_density(aes(melt(x)$value),fill = "lightblue") +  geom_density(aes(melt(y)$value),fill = "salmon",alpha = 0.5)
+
+#write_csv(pvals, path = "./metabolomics_dmso_brd_ttests_floor4000.csv")
+write_csv(pvals, path = paste0("./metabolomics_062019/metabolomics_062019.csv"))
+#pvals1 <- data.table::fread(input = "./metabolomics_062019/metabolomics_062019.csv")
+
+pvals_noNAs <- pvals[,colSums(is.na(pvals)) == 0] %>% as.data.frame
+write_csv(pvals_noNAs, path = paste0("./metabolomics_062019/metabolomics_062019_noNA.csv"))
+
+#ggplot(pvals) + geom_density(aes(x = p.adj_cjm_4hr))
+
+ggplot(pvals) + geom_density(aes(x = -log10(`p.val_CJM_CERS1_BRD-1748_8Hours`)))
+
+ggplot(pvals) + geom_density(aes(x = (`p.adj_CJM_CERS1_BRD-1748_8Hours`))) + scale_x_log10() + geom_vline(xintercept = 0.1)
+
+pvals_noNAs %>% dplyr::select(contains("p.adj")) %>% apply(2,FUN = function(x) sum(x < 0.01))
+
+```
+
+```{r}
+head(data)
+
+dat <- data %>% as.data.frame %>% dplyr::select(-starts_with("PREF")) %>% column_to_rownames(var = "Compound") %>%
+    dplyr::select(-MZ,-RT,-HMDB,-Assignment_certainty,-Metabolite)
+dat[is.na(dat)] <- 0
+
+#dat %>% as.character.numeric_version() %>% unlist %>% corner#%>% as.numeric %>% corner
+#dat %>% corner
+
+dat %>% colMeans(na.rm = T)
+
+#dat$`639V_DMSO_4Hours_R1` %>% sum(na.rm = T)/dim(dat)[1]
+#dat$`639V_DMSO_4Hours_R1` %>% var(na.rm = T)
+
+#dat %>% apply(2, FUN = mean, na.rm = T)
+
+#dat$`639V_DMSO_4Hours_R1` %>% sort
+
+#data.matrix(as.character(dat)) %>% corner
+
+statsdat <- dat %>% dplyr::summarise_all(.funs = mean) %>% rbind(dplyr::summarise_all(dat, .funs = var)) %>% 
+    t %>% set_colnames(c("mean","var")) %>% as.data.frame %>%
+    dplyr::mutate(stddev = sqrt(var)) 
+```
+
+```{r}
+metabolites <- rownames(dat)
+dattidy <- dat %>% t %>% as.data.frame %>% 
+    rownames_to_column(var = "sample") %>% 
+    dplyr::mutate(sample = str_replace_all(.$sample, '_CERS1', '-CERS1')) %>%
+    dplyr::mutate(cellline = word(sample,sep = fixed("_")), trt = word(sample,2,sep = fixed("_")),
+                  time = word(sample,3,sep = fixed("_")),
+                  rep = word(sample,4,sep = fixed("_"))) %>%
+    dplyr::select(-sample) %>%
+    tidyr::gather(metabolites, key = "mtb",value = "count")
+
+datstats <- dattidy %>% dplyr::group_by(cellline, trt, time, mtb) %>% 
+    dplyr::summarize(mean = mean(count), stddev = sqrt(var(count)))
+
+#write_csv(x = datstats, path = "./metabolomics_062019/stats_table.csv")
+
+
+pvalstidy <- pvals_noNAs %>% column_to_rownames(var = "compound") %>%
+    t %>% as.data.frame %>% rownames_to_column(var = "sample") %>% 
+    dplyr::mutate(sample = str_replace_all(.$sample, '_CERS1', '-CERS1')) %>%
+    dplyr::mutate(valuetype = word(sample,sep = fixed("_")), 
+                  cellline = word(sample,2,sep = fixed("_")), 
+                  trt = word(sample,3,sep = fixed("_")),
+                  time = word(sample,4,sep = fixed("_"))) %>%
+    dplyr::select(-sample) %>% 
+    tidyr::gather(metabolites, key = "mtb",value = "count") %>%
+    tidyr::spread(key = valuetype, value = count) 
+    #dplyr::select(sample,valuetype,cellline,trt,time) %>% head
+
+full <- left_join(pvalstidy,datstats)
+
+#write_csv(x = full, path = "./metabolomics_062019/met_table_full.csv")
 ```
 
